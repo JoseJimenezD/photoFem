@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>PhotoFEM v3</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#f4f6fa;color:#172033}.app{max-width:900px;margin:auto;padding:12px}.card{background:white;border:1px solid #d7deea;border-radius:16px;padding:13px;margin-bottom:11px}.steps{display:flex;gap:6px;overflow:auto;margin-bottom:10px}.step{white-space:nowrap;padding:6px 10px;border:1px solid #ccd5e2;border-radius:999px;background:#fff;font-size:13px}.ok{background:#ecfdf5;border-color:#86efac}button,input,select{font:inherit;min-height:46px;border:1px solid #cbd5e1;border-radius:11px;background:white;padding:8px}button{cursor:pointer}.primary{background:#3264e8;color:white;border-color:#3264e8}.buttons,.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}canvas{width:100%;height:auto;border:1px solid #d7deea;border-radius:12px;background:#fff;display:block;touch-action:none}.grid{display:grid;grid-template-columns:1fr 310px;gap:11px}.small{font-size:13px;color:#64748b}.status{padding:10px;background:#f8fafc;border-radius:10px;margin-top:8px}.hidden{display:none!important}label{display:block;font-size:13px;color:#64748b;margin-top:8px}label input,label select{display:block;width:100%;margin-top:3px;color:#172033}.item{border-top:1px solid #e5e7eb;padding:8px 0}.face{display:inline-block;padding:5px 8px;margin:3px;border:1px solid #bfdbfe;border-radius:8px;color:#1d4ed8;background:#eff6ff}.legend{height:12px;border-radius:8px;background:linear-gradient(90deg,#172a88,#1b78c5,#31c6b3,#dce64a,#f69a2a,#c81d25)}.leg{display:flex;justify-content:space-between;font-size:11px;color:#64748b}@media(max-width:760px){.grid{grid-template-columns:1fr}}
+</style></head>
+<body><div class="app">
+<div class="steps"><span id="s1" class="step">1 Photo</span><span id="s2" class="step">2 Geometry</span><span id="s3" class="step">3 Dimensions</span><span id="s4" class="step">4 BC</span><span id="s5" class="step">5 Mesh</span><span id="s6" class="step">6 Solve</span></div>
+<div class="grid"><main>
+<div class="card">
+ <div class="buttons"><button id="take" class="primary">📷 Take Photo</button><button id="choose">🖼 Choose Photo</button></div>
+ <input id="cam" class="hidden" type="file" accept="image/*" capture="environment"><input id="lib" class="hidden" type="file" accept="image/*">
+ <div style="height:9px"></div><canvas id="cv" width="800" height="600"></canvas>
+ <div id="legendBox" class="hidden"><div class="legend"></div><div class="leg"><span id="mn"></span><span>Temperature [°C]</span><span id="mx"></span></div></div>
+ <div id="msg" class="status">Take or choose a photo. Then press Detect & Idealize.</div>
+ <div class="buttons" style="margin-top:8px"><button id="detect" class="primary" disabled>Detect & Idealize</button><button id="clear">Clear / New Image</button></div>
+</div>
+<div class="card"><b>FEM</b>
+ <div class="row"><label>Mesh size [mm]<input id="hs" type="number" value="8"></label><label>Thickness [mm]<input id="thk" type="number" value="1"></label></div>
+ <div class="buttons" style="margin-top:8px"><button id="meshBtn" disabled>Generate Mesh</button><button id="solveBtn" class="primary" disabled>Solve FEM</button></div>
+ <div id="stats" class="small" style="margin-top:7px">No mesh.</div>
+</div>
+</main><aside>
+<div class="card"><b>Idealized geometry</b><div id="geom" class="small">No geometry yet.</div></div>
+<div class="card"><b>Dimensions</b>
+ <label>Rectangle width [mm]<input id="W" type="number" value="100"></label>
+ <label>Rectangle height [mm]<input id="H" type="number" value="100"></label>
+ <label>Hole diameter [mm]<input id="D" type="number" value="30"></label>
+ <button id="dims" style="width:100%;margin-top:8px" disabled>Confirm dimensions</button>
+</div>
+<div class="card"><b>Boundary faces</b><div class="small">Tap a blue face label on the drawing:</div><div id="faces"><span class="face">TOP</span><span class="face">BOTTOM</span><span class="face">LEFT</span><span class="face">RIGHT</span><span class="face">HOLE 1</span></div><div id="selectedFace" class="status">No face selected.</div></div>
+<div class="card"><b>Material</b><label>k [W/m·K]<input id="k" type="number" value="16.2"></label></div>
+<div class="card"><b>Boundary condition</b>
+ <label>Name<input id="bcName"></label><label>Type<select id="bcType"><option value="T">Temperature</option><option value="adiabatic">Adiabatic</option></select></label>
+ <label id="valueBox">Temperature [°C]<input id="bcVal" type="number" value="300"></label>
+ <button id="saveBC" style="width:100%;margin-top:8px">Add / Update BC</button><div id="bclist" class="small" style="margin-top:7px">None.</div>
+</div>
+</aside></div></div>
+<script>
+const $=id=>document.getElementById(id),cv=$('cv'),g=cv.getContext('2d');
+let img=null,geom=null,scaleX=1,scaleY=1,mesh=null,T=null,selectedFace=null,bcs={};
+function ok(id){$(id).classList.add('ok')}
+$('take').onclick=()=>$('cam').click();$('choose').onclick=()=>$('lib').click();
+$('cam').onchange=e=>load(e.target.files[0]);$('lib').onchange=e=>load(e.target.files[0]);
+function load(f){if(!f)return;let r=new FileReader();r.onload=e=>{let im=new Image();im.onload=()=>{img=im;geom=mesh=T=null;$('detect').disabled=false;ok('s1');drawPhoto();$('msg').textContent='Photo loaded. Press Detect & Idealize.'};im.src=e.target.result};r.readAsDataURL(f)}
+function fit(){let s=Math.min(cv.width/img.width,cv.height/img.height);return{s,x:(cv.width-img.width*s)/2,y:(cv.height-img.height*s)/2,w:img.width*s,h:img.height*s}}
+function drawPhoto(){g.fillStyle='#fff';g.fillRect(0,0,cv.width,cv.height);if(img){let f=fit();g.drawImage(img,f.x,f.y,f.w,f.h)}}
+function tag(t,x,y){g.font='bold 17px system-ui';g.textAlign='center';g.textBaseline='middle';let w=g.measureText(t).width+16;g.fillStyle='#ffffffe8';g.fillRect(x-w/2,y-14,w,28);g.strokeStyle='#2563eb';g.lineWidth=2;g.strokeRect(x-w/2,y-14,w,28);g.fillStyle='#1d4ed8';g.fillText(t,x,y)}
+function drawGeom(){drawPhoto();if(!geom)return;let b=geom.rect;g.strokeStyle='#16a34a';g.lineWidth=5;g.strokeRect(b.x,b.y,b.w,b.h);g.strokeStyle='#a855f7';g.beginPath();g.arc(geom.cx,geom.cy,geom.r,0,Math.PI*2);g.stroke();tag('TOP',b.x+b.w/2,b.y+18);tag('BOTTOM',b.x+b.w/2,b.y+b.h-18);tag('LEFT',b.x+32,b.y+b.h/2);tag('RIGHT',b.x+b.w-34,b.y+b.h/2);tag('HOLE 1',geom.cx,geom.cy)}
+function otsu(a){let hist=new Array(256).fill(0);a.forEach(v=>hist[v]++);let n=a.length,sum=0;for(let i=0;i<256;i++)sum+=i*hist[i];let sb=0,wb=0,best=0,th=128;for(let i=0;i<256;i++){wb+=hist[i];if(!wb)continue;let wf=n-wb;if(!wf)break;sb+=i*hist[i];let mb=sb/wb,mf=(sum-sb)/wf,v=wb*wf*(mb-mf)*(mb-mf);if(v>best){best=v;th=i}}return th}
+function detect(){
+ drawPhoto();let d=g.getImageData(0,0,cv.width,cv.height).data,w=cv.width,h=cv.height,gr=new Uint8Array(w*h);
+ for(let i=0;i<w*h;i++)gr[i]=(.299*d[4*i]+.587*d[4*i+1]+.114*d[4*i+2])|0;
+ let th=Math.min(otsu(gr),190),pts=[];
+ for(let y=20;y<h-20;y+=2)for(let x=20;x<w-20;x+=2)if(gr[y*w+x]<th-8)pts.push([x,y]);
+ if(pts.length<40){$('msg').textContent='Not enough dark drawing detected. Use a closer, higher-contrast photo.';return}
+ // Ignore isolated text/background by using central 80% and estimate outer engineering rectangle from robust quantiles.
+ let xs=pts.map(p=>p[0]).sort((a,b)=>a-b),ys=pts.map(p=>p[1]).sort((a,b)=>a-b),q=(a,p)=>a[Math.floor((a.length-1)*p)];
+ let x0=q(xs,.08),x1=q(xs,.92),y0=q(ys,.08),y1=q(ys,.92);
+ // Search a circular dark contour inside rectangle: score radial darkness around candidate centers.
+ let bw=x1-x0,bh=y1-y0,best=null;
+ for(let cy=y0+bh*.22;cy<y1-bh*.18;cy+=8)for(let cx=x0+bw*.18;cx<x1-bw*.18;cx+=8)for(let rr=Math.min(bw,bh)*.08;rr<Math.min(bw,bh)*.28;rr+=6){
+   let hit=0,N=32;for(let j=0;j<N;j++){let x=Math.round(cx+rr*Math.cos(2*Math.PI*j/N)),y=Math.round(cy+rr*Math.sin(2*Math.PI*j/N));if(x>0&&y>0&&x<w&&y<h&&gr[y*w+x]<th+5)hit++}
+   let score=hit/N;if(!best||score>best.score)best={cx,cy,r:rr,score}
+ }
+ if(!best||best.score<.22){best={cx:x0+bw*.42,cy:y0+bh*.42,r:Math.min(bw,bh)*.16,score:0}}
+ geom={rect:{x:x0,y:y0,w:bw,h:bh},cx:best.cx,cy:best.cy,r:best.r};mesh=T=null;drawGeom();ok('s2');$('dims').disabled=false;
+ $('geom').innerHTML='<b>Rectangle</b><br>4 faces: TOP, BOTTOM, LEFT, RIGHT<br><br><b>Circle</b><br>1 internal boundary: HOLE 1';
+ $('msg').textContent='Geometry idealized as RECTANGLE + CIRCULAR HOLE. Adjust the dimensions, then confirm.';
+}
+$('detect').onclick=detect;
+$('dims').onclick=()=>{if(!geom)return;scaleX=+$('W').value/geom.rect.w;scaleY=+$('H').value/geom.rect.h;ok('s3');$('meshBtn').disabled=false;$('msg').textContent='Dimensions confirmed. Tap TOP, BOTTOM, LEFT, RIGHT or HOLE 1 to assign BCs.'}
+function hitFace(x,y){let b=geom.rect,t=42;if(Math.hypot(x-geom.cx,y-geom.cy)<geom.r+t)return'HOLE 1';let ds={TOP:Math.abs(y-b.y),BOTTOM:Math.abs(y-(b.y+b.h)),LEFT:Math.abs(x-b.x),RIGHT:Math.abs(x-(b.x+b.w))};return Object.keys(ds).sort((a,b)=>ds[a]-ds[b])[0]}
+cv.onclick=e=>{if(!geom)return;let r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;selectedFace=hitFace(x,y);$('selectedFace').textContent='Selected: '+selectedFace;$('bcName').value=selectedFace}
+$('bcType').onchange=()=> $('valueBox').classList.toggle('hidden',$('bcType').value==='adiabatic');
+$('saveBC').onclick=()=>{if(!selectedFace){$('msg').textContent='Select a face first.';return}bcs[selectedFace]={type:$('bcType').value,val:+$('bcVal').value,name:$('bcName').value||selectedFace};renderBC();ok('s4')}
+function renderBC(){$('bclist').innerHTML=Object.keys(bcs).length?Object.entries(bcs).map(([f,b])=>'<div class="item"><b>'+f+'</b> · '+b.type+(b.type==='T'?' = '+b.val+' °C':'')+'</div>').join(''):'None.'}
+function inside(x,y){let b=geom.rect;return x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h&&Math.hypot(x-geom.cx,y-geom.cy)>=geom.r}
+$('meshBtn').onclick=()=>{let mm=+$('hs').value,hpx=Math.max(5,mm/((scaleX+scaleY)/2)),b=geom.rect,n=[],e=[],M=new Map();function nd(x,y){let k=x.toFixed(2)+','+y.toFixed(2);if(M.has(k))return M.get(k);let i=n.length;n.push({x,y});M.set(k,i);return i}for(let y=b.y;y<b.y+b.h;y+=hpx)for(let x=b.x;x<b.x+b.w;x+=hpx){let x2=Math.min(x+hpx,b.x+b.w),y2=Math.min(y+hpx,b.y+b.h),ids=[nd(x,y),nd(x2,y),nd(x2,y2),nd(x,y2)];for(let t of [[ids[0],ids[1],ids[2]],[ids[0],ids[2],ids[3]]]){let cx=t.reduce((s,i)=>s+n[i].x,0)/3,cy=t.reduce((s,i)=>s+n[i].y,0)/3;if(inside(cx,cy))e.push(t)}}mesh={n,e,hpx};T=null;drawMesh();$('solveBtn').disabled=false;ok('s5');$('stats').textContent=n.length+' nodes · '+e.length+' triangular elements'}
+function drawMesh(){drawPhoto();if(!mesh){drawGeom();return}g.save();if(T){let a=Math.min(...T),b=Math.max(...T);mesh.e.forEach(el=>{let z=el.reduce((s,i)=>s+T[i],0)/3,u=(z-a)/(b-a||1),R=Math.round(30+210*u),B=Math.round(220-190*u);g.fillStyle=`rgb(${R},${Math.round(110+70*(1-Math.abs(u-.5)*2))},${B})`;g.beginPath();el.forEach((i,j)=>{let p=mesh.n[i];j?g.lineTo(p.x,p.y):g.moveTo(p.x,p.y)});g.closePath();g.fill()})}g.strokeStyle='#33415588';g.lineWidth=.65;mesh.e.forEach(el=>{g.beginPath();el.forEach((i,j)=>{let p=mesh.n[i];j?g.lineTo(p.x,p.y):g.moveTo(p.x,p.y)});g.closePath();g.stroke()});g.restore();drawGeom()}
+function gauss(A,b){let n=b.length;for(let k=0;k<n;k++){let p=k;for(let i=k+1;i<n;i++)if(Math.abs(A[i][k])>Math.abs(A[p][k]))p=i;if(Math.abs(A[p][k])<1e-12)throw Error('singular system');[A[k],A[p]]=[A[p],A[k]];[b[k],b[p]]=[b[p],b[k]];let q=A[k][k];for(let j=k;j<n;j++)A[k][j]/=q;b[k]/=q;for(let i=0;i<n;i++)if(i!==k){let f=A[i][k];for(let j=k;j<n;j++)A[i][j]-=f*A[k][j];b[i]-=f*b[k]}}return b}
+$('solveBtn').onclick=()=>{if(!mesh)return;let N=mesh.n.length;if(N>650){$('msg').textContent='Mesh too fine for the mobile solver. Increase mesh size.';return}let K=Array.from({length:N},()=>new Float64Array(N)),F=new Float64Array(N),kk=+$('k').value,t=+$('thk').value/1000,sx=scaleX/1000,sy=scaleY/1000;
+mesh.e.forEach(el=>{let p=el.map(i=>mesh.n[i]),x=p.map(z=>(z.x-geom.rect.x)*sx),y=p.map(z=>(z.y-geom.rect.y)*sy),A=Math.abs((x[1]-x[0])*(y[2]-y[0])-(x[2]-x[0])*(y[1]-y[0]))/2;if(A<1e-14)return;let bb=[y[1]-y[2],y[2]-y[0],y[0]-y[1]],cc=[x[2]-x[1],x[0]-x[2],x[1]-x[0]];for(let i=0;i<3;i++)for(let j=0;j<3;j++)K[el[i]][el[j]]+=kk*t*(bb[i]*bb[j]+cc[i]*cc[j])/(4*A)});
+let D=new Map(),b=geom.rect,tol=mesh.hpx*.8;mesh.n.forEach((p,i)=>{let face=Math.abs(p.y-b.y)<tol?'TOP':Math.abs(p.y-(b.y+b.h))<tol?'BOTTOM':Math.abs(p.x-b.x)<tol?'LEFT':Math.abs(p.x-(b.x+b.w))<tol?'RIGHT':Math.abs(Math.hypot(p.x-geom.cx,p.y-geom.cy)-geom.r)<tol?'HOLE 1':null,bc=bcs[face];if(bc&&bc.type==='T')D.set(i,bc.val)});if(!D.size){$('msg').textContent='Add at least one Temperature BC.';return}D.forEach((v,d)=>{for(let i=0;i<N;i++)if(i!==d){F[i]-=K[i][d]*v;K[i][d]=0;K[d][i]=0}K[d][d]=1;F[d]=v});try{T=gauss(K.map(r=>Array.from(r)),Array.from(F))}catch(e){$('msg').textContent='Solver failed: '+e.message;return}let a=Math.min(...T),z=Math.max(...T);$('mn').textContent=a.toFixed(1);$('mx').textContent=z.toFixed(1);$('legendBox').classList.remove('hidden');drawMesh();ok('s6');$('msg').textContent='Solved. The 2D temperature field is calculated from the FEM nodal solution.'}
+$('clear').onclick=()=>{img=geom=mesh=T=null;bcs={};selectedFace=null;g.clearRect(0,0,cv.width,cv.height);$('detect').disabled=true;$('dims').disabled=true;$('meshBtn').disabled=true;$('solveBtn').disabled=true;$('geom').textContent='No geometry yet.';$('selectedFace').textContent='No face selected.';$('msg').textContent='Take or choose a new photo.'}
+drawPhoto();
+</script></body></html>
