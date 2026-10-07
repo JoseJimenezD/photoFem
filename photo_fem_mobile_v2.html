@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Photo → FEM Mobile</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#f3f5f9;color:#162033}.app{max-width:900px;margin:auto;padding:12px}
+.card{background:#fff;border:1px solid #d8deea;border-radius:14px;padding:12px;margin-bottom:10px}button,input,select{font:inherit;min-height:46px;border:1px solid #cbd3e0;border-radius:10px;background:white;padding:8px}
+button{cursor:pointer}.primary{background:#2563eb;color:#fff;border-color:#2563eb}.buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px}.tabs{display:flex;gap:6px;overflow:auto;margin-bottom:10px}.tab{white-space:nowrap;font-size:12px;padding:5px 9px;border:1px solid #ccd4e0;border-radius:999px;background:white}.ok{background:#ecfdf5;border-color:#86efac}
+canvas{width:100%;height:auto;display:block;border:1px solid #d8deea;border-radius:10px;background:#fff;touch-action:none}.small{font-size:13px;color:#657084}.status{padding:9px;border-radius:9px;background:#f8fafc;font-size:13px;margin-top:8px}
+.grid{display:grid;grid-template-columns:1fr 310px;gap:10px}.row{display:grid;grid-template-columns:1fr 1fr;gap:7px}label{display:block;color:#657084;font-size:13px;margin-top:7px}label input,label select{width:100%;margin-top:3px;color:#162033}
+.item{padding:8px 0;border-top:1px solid #e5e7eb}.item button{min-height:32px;padding:3px 7px;margin:4px 3px 0 0}.legend{height:12px;border-radius:8px;background:linear-gradient(90deg,#172a88,#1b78c5,#31c6b3,#dce64a,#f69a2a,#c81d25)}.leg{display:flex;justify-content:space-between;font-size:11px;color:#657084}
+.hidden{display:none!important}@media(max-width:760px){.grid{grid-template-columns:1fr}}
+</style></head>
+<body><div class="app">
+<div class="tabs"><span id="sPhoto" class="tab">Photo</span><span id="sDetect" class="tab">Geometry</span><span id="sScale" class="tab">Scale</span><span id="sBC" class="tab">BC</span><span id="sMesh" class="tab">Mesh</span><span id="sSolve" class="tab">Solve</span></div>
+<div class="grid"><main>
+<div class="card">
+<div class="buttons">
+<button id="cameraBtn" class="primary">📷 Take Photo</button><button id="libraryBtn">🖼 Choose Photo</button>
+</div>
+<input id="camera" class="hidden" type="file" accept="image/*" capture="environment">
+<input id="library" class="hidden" type="file" accept="image/*">
+<div style="height:8px"></div><canvas id="cv" width="800" height="600"></canvas>
+<div id="legendBox" class="hidden"><div class="legend"></div><div class="leg"><span id="tmin"></span><span>Temperature [°C]</span><span id="tmax"></span></div></div>
+<div id="msg" class="status">Toma una foto o elige una imagen del celular. La imagen seleccionada aparecerá aquí.</div>
+<div class="buttons" style="margin-top:8px"><button id="detect" disabled class="primary">Detect Geometry</button><button id="reset">New Photo</button></div>
+<div class="buttons" style="margin-top:8px"><button id="vphoto">Photo</button><button id="vvector">Geometry / Mesh / Result</button></div>
+</div>
+<div class="card"><b>FEM</b><div class="row"><label>Mesh size [mm]<input id="meshSize" type="number" value="8"></label><label>Thickness [mm]<input id="thk" type="number" value="1"></label></div>
+<div class="buttons" style="margin-top:8px"><button id="meshBtn" disabled>Generate Mesh</button><button id="solveBtn" disabled class="primary">Solve FEM</button></div><div id="stats" class="small" style="margin-top:6px">No mesh.</div></div>
+</main><aside>
+<div class="card"><b>Detected geometry</b><div id="geomList" class="small">Load a photo first.</div></div>
+<div class="card"><b>Selected contour</b><div id="selTxt" class="small">Tap a detected contour.</div><label>Classification<select id="role"><option value="solid">Solid boundary</option><option value="hole">Hole</option><option value="ignore">Ignore</option></select></label><button id="applyRole" style="width:100%;margin-top:8px">Apply</button></div>
+<div class="card"><b>Scale</b><label>Known outer width [mm]<input id="realW" type="number" value="100"></label><button id="scaleBtn" style="width:100%;margin-top:8px">Set scale</button><div id="scaleTxt" class="small" style="margin-top:5px">Not calibrated.</div></div>
+<div class="card"><b>Material</b><label>k [W/m·K]<input id="k" type="number" value="16.2"></label></div>
+<div class="card"><b>Boundary condition</b><div id="edgeTxt" class="small">After geometry is accepted, tap an outer edge.</div><label>Name<input id="bcName"></label><label>Type<select id="bcType"><option value="T">Temperature</option><option value="flux">Heat flux</option><option value="conv">Convection</option><option value="adiabatic">Adiabatic</option></select></label><label id="valBox">Value<input id="bcVal" type="number" value="300"></label><div id="convBox" class="row hidden"><label>h<input id="hh" type="number" value="100"></label><label>T∞ °C<input id="ti" type="number" value="20"></label></div><button id="saveBC" style="width:100%;margin-top:8px">Add BC</button></div>
+<div class="card"><b>Applied BCs</b><div id="bcList" class="small">None.</div></div>
+</aside></div></div>
+<script>
+const $=x=>document.getElementById(x),C=$('cv'),ctx=C.getContext('2d');
+let img=null,view='photo',contours=[],selected=-1,scale=null,domain=null,mesh=null,T=null,edge=null,bcs=[],editing=-1;
+function mark(id,v=true){$(id).classList.toggle('ok',v)}
+$('cameraBtn').onclick=()=>$('camera').click();$('libraryBtn').onclick=()=>$('library').click();
+function load(file){if(!file)return;let rd=new FileReader();rd.onload=e=>{let im=new Image();im.onload=()=>{img=im;view='photo';contours=[];domain=mesh=T=null;$('detect').disabled=false;mark('sPhoto');draw();$('msg').textContent='Imagen cargada correctamente ('+im.naturalWidth+'×'+im.naturalHeight+'). Pulsa Detect Geometry.'};im.onerror=()=>{$('msg').textContent='No pude decodificar esta imagen. Prueba JPG o PNG.'};im.src=e.target.result};rd.onerror=()=>{$('msg').textContent='No pude leer el archivo seleccionado.'};rd.readAsDataURL(file)}
+$('camera').onchange=e=>load(e.target.files[0]);$('library').onchange=e=>load(e.target.files[0]);
+function fit(){if(!img)return null;let s=Math.min(C.width/img.width,C.height/img.height);return{s,x:(C.width-img.width*s)/2,y:(C.height-img.height*s)/2,w:img.width*s,h:img.height*s}}
+function drawPhoto(){ctx.fillStyle='#fff';ctx.fillRect(0,0,C.width,C.height);if(img){let f=fit();ctx.drawImage(img,f.x,f.y,f.w,f.h)}}
+function draw(){drawPhoto();if(view==='photo')return;if(domain){ctx.save();ctx.globalAlpha=.88;if(T&&mesh){let mn=Math.min(...T),mx=Math.max(...T);mesh.e.forEach((e,i)=>{let av=(T[e[0]]+T[e[1]]+T[e[2]])/3;ctx.fillStyle=tempColor(av,mn,mx);ctx.beginPath();e.forEach((n,j)=>{let p=mesh.n[n];j?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)});ctx.closePath();ctx.fill()})}if(mesh){ctx.strokeStyle='#26364f88';ctx.lineWidth=.7;mesh.e.forEach(e=>{ctx.beginPath();e.forEach((n,j)=>{let p=mesh.n[n];j?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)});ctx.closePath();ctx.stroke()})}ctx.restore()}
+contours.forEach((c,i)=>{if(c.role==='ignore')return;ctx.strokeStyle=i===selected?'#ef4444':c.role==='hole'?'#a855f7':'#16a34a';ctx.lineWidth=i===selected?6:4;ctx.beginPath();c.p.forEach((p,j)=>j?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke()})}
+function tempColor(z,a,b){let u=Math.max(0,Math.min(1,(z-a)/(b-a||1))),S=[[23,42,136],[27,120,197],[49,198,179],[220,230,74],[246,154,42],[200,29,37]],p=u*5,i=Math.min(4,Math.floor(p)),v=p-i,A=S[i],B=S[i+1];return`rgb(${A.map((q,j)=>Math.round(q+(B[j]-q)*v)).join(',')})`}
+function detect(){
+ if(!img)return;drawPhoto();let im=ctx.getImageData(0,0,C.width,C.height),d=im.data,w=C.width,h=C.height;
+ // grayscale + local contrast threshold
+ let gray=new Uint8Array(w*h);for(let i=0;i<w*h;i++)gray[i]=(.299*d[i*4]+.587*d[i*4+1]+.114*d[i*4+2])|0;
+ let bin=new Uint8Array(w*h),R=12; // integral image
+ let I=new Float64Array((w+1)*(h+1));for(let y=1;y<=h;y++){let rs=0;for(let x=1;x<=w;x++){rs+=gray[(y-1)*w+x-1];I[y*(w+1)+x]=I[(y-1)*(w+1)+x]+rs}}
+ for(let y=R;y<h-R;y++)for(let x=R;x<w-R;x++){let x0=x-R,y0=y-R,x1=x+R,y1=y+R,A=I[y0*(w+1)+x0],B=I[y0*(w+1)+x1],D=I[y1*(w+1)+x0],E=I[y1*(w+1)+x1],mean=(E-B-D+A)/((2*R)*(2*R));if(gray[y*w+x]<mean-10)bin[y*w+x]=1}
+ // connected components with small-gap bridging
+ let seen=new Uint8Array(w*h),comps=[],dirs=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+ for(let y=10;y<h-10;y+=2)for(let x=10;x<w-10;x+=2){let id=y*w+x;if(!bin[id]||seen[id])continue;let q=[[x,y]],p=[];seen[id]=1;while(q.length&&p.length<60000){let [a,b]=q.pop();p.push([a,b]);for(let [dx,dy] of dirs)for(let st=1;st<=5;st++){let nx=a+dx*st,ny=b+dy*st;if(nx<2||ny<2||nx>=w-2||ny>=h-2)break;let ni=ny*w+nx;if(bin[ni]&&!seen[ni]){seen[ni]=1;q.push([nx,ny]);break}}}if(p.length>45)comps.push(p)}
+ function hull(P){P=[...new Map(P.map(p=>[p.join(','),p])).values()].sort((a,b)=>a[0]-b[0]||a[1]-b[1]);if(P.length<3)return P;let cr=(o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]),lo=[],up=[];for(let p of P){while(lo.length>1&&cr(lo.at(-2),lo.at(-1),p)<=0)lo.pop();lo.push(p)}for(let p of P.slice().reverse()){while(up.length>1&&cr(up.at(-2),up.at(-1),p)<=0)up.pop();up.push(p)}return lo.slice(0,-1).concat(up.slice(0,-1))}
+ contours=comps.map(p=>{let xs=p.map(z=>z[0]),ys=p.map(z=>z[1]),box={x0:Math.min(...xs),x1:Math.max(...xs),y0:Math.min(...ys),y1:Math.max(...ys)};let hp=hull(p.filter((_,i)=>i%2===0)),step=Math.max(1,Math.floor(hp.length/24));return{p:hp.filter((_,i)=>i%step===0).map(z=>({x:z[0],y:z[1]})),box,area:(box.x1-box.x0)*(box.y1-box.y0),role:'solid'}}).filter(c=>c.area>700&&c.box.x1-c.box.x0>20&&c.box.y1-c.box.y0>20).sort((a,b)=>b.area-a.area).slice(0,8);
+ // largest candidate defaults solid, nested candidates default hole
+ if(contours.length){let o=contours[0];contours.forEach((c,i)=>{c.role=i===0?'solid':(c.box.x0>o.box.x0&&c.box.x1<o.box.x1&&c.box.y0>o.box.y0&&c.box.y1<o.box.y1?'hole':'ignore')})}
+ view='vector';mark('sDetect');renderGeom();draw();$('msg').textContent=contours.length?contours.length+' contornos candidatos detectados. Tócalos para corregir Solid / Hole / Ignore.':'No encontré contornos robustos. Prueba una foto más cercana, con mayor contraste y el dibujo completo.'
+}
+$('detect').onclick=detect;
+function renderGeom(){let z=$('geomList');z.innerHTML='';if(!contours.length){z.textContent='No contours.';return}contours.forEach((c,i)=>{let d=document.createElement('div');d.className='item';d.innerHTML='<b>Contour '+(i+1)+'</b><div>'+c.role+' · '+Math.round(c.box.x1-c.box.x0)+'×'+Math.round(c.box.y1-c.box.y0)+' px</div>';d.onclick=()=>{selected=i;$('selTxt').textContent='Contour '+(i+1);$('role').value=c.role;draw();renderGeom()};z.appendChild(d)})}
+$('applyRole').onclick=()=>{if(selected<0)return;contours[selected].role=$('role').value;renderGeom();draw()}
+$('scaleBtn').onclick=()=>{let o=contours.find(c=>c.role==='solid');if(!o){$('msg').textContent='Define an outer Solid boundary first.';return}scale=+$('realW').value/(o.box.x1-o.box.x0);domain=o;mark('sScale');$('scaleTxt').textContent=scale.toFixed(4)+' mm/pixel';$('meshBtn').disabled=false;$('msg').textContent='Escala definida. Ahora puedes seleccionar límites del contorno y aplicar BC.'}
+C.onclick=e=>{if(view==='photo')return;let r=C.getBoundingClientRect(),x=(e.clientX-r.left)*C.width/r.width,y=(e.clientY-r.top)*C.height/r.height;if(!domain){let best=-1,bd=1e9;contours.forEach((c,i)=>c.p.forEach(p=>{let d=(p.x-x)**2+(p.y-y)**2;if(d<bd){bd=d;best=i}}));if(best>=0){selected=best;$('selTxt').textContent='Contour '+(best+1);$('role').value=contours[best].role;draw();renderGeom()}return}let b=domain.box,ds={left:Math.abs(x-b.x0),right:Math.abs(x-b.x1),top:Math.abs(y-b.y0),bottom:Math.abs(y-b.y1)};edge=Object.keys(ds).sort((a,b)=>ds[a]-ds[b])[0];$('edgeTxt').textContent='Selected: '+edge;$('bcName').value=edge}
+$('bcType').onchange=()=>{let c=$('bcType').value;$('convBox').classList.toggle('hidden',c!=='conv');$('valBox').classList.toggle('hidden',c==='conv'||c==='adiabatic')}
+function renderBC(){let z=$('bcList');z.innerHTML='';if(!bcs.length){z.textContent='None.';return}mark('sBC');bcs.forEach((b,i)=>{let d=document.createElement('div');d.className='item';d.innerHTML='<b>'+b.name+'</b><div>'+b.edge+' · '+b.type+'</div><button data-e='+i+'>Edit</button><button data-d='+i+'>Delete</button>';z.appendChild(d)});z.querySelectorAll('[data-d]').forEach(q=>q.onclick=()=>{bcs.splice(+q.dataset.d,1);renderBC()});z.querySelectorAll('[data-e]').forEach(q=>q.onclick=()=>{let b=bcs[+q.dataset.e];editing=+q.dataset.e;edge=b.edge;$('bcName').value=b.name;$('bcType').value=b.type;$('bcVal').value=b.value||0;$('hh').value=b.h||100;$('ti').value=b.ti||20;$('bcType').onchange();$('saveBC').textContent='Update BC'})}
+$('saveBC').onclick=()=>{if(!edge){$('msg').textContent='Tap an outer edge first.';return}let type=$('bcType').value,b={edge,name:$('bcName').value||edge,type,value:+$('bcVal').value,h:+$('hh').value,ti:+$('ti').value};if(editing>=0){bcs[editing]=b;editing=-1;$('saveBC').textContent='Add BC'}else{let i=bcs.findIndex(x=>x.edge===edge);i>=0?bcs[i]=b:bcs.push(b)}renderBC()}
+function pointInPoly(x,y,p){let inside=false;for(let i=0,j=p.length-1;i<p.length;j=i++){let a=p[i],b=p[j];if(((a.y>y)!=(b.y>y))&&(x<(b.x-a.x)*(y-a.y)/(b.y-a.y)+a.x))inside=!inside}return inside}
+$('meshBtn').onclick=()=>{if(!domain||!scale)return;let hpx=Math.max(5,+$('meshSize').value/scale),b=domain.box,n=[],e=[],map=new Map();function nd(x,y){let k=x.toFixed(2)+','+y.toFixed(2);if(map.has(k))return map.get(k);let i=n.length;n.push({x,y});map.set(k,i);return i}let holes=contours.filter(c=>c.role==='hole');function inside(x,y){return pointInPoly(x,y,domain.p)&&!holes.some(h=>pointInPoly(x,y,h.p))}for(let y=b.y0;y<b.y1;y+=hpx)for(let x=b.x0;x<b.x1;x+=hpx){let x2=Math.min(x+hpx,b.x1),y2=Math.min(y+hpx,b.y1),cx=(x+x2)/2,cy=(y+y2)/2;if(!inside(cx,cy))continue;let ids=[nd(x,y),nd(x2,y),nd(x2,y2),nd(x,y2)];[[ids[0],ids[1],ids[2]],[ids[0],ids[2],ids[3]]].forEach(t=>{let px=t.reduce((s,i)=>s+n[i].x,0)/3,py=t.reduce((s,i)=>s+n[i].y,0)/3;if(inside(px,py))e.push(t)})}mesh={n,e,hpx};T=null;view='vector';draw();$('solveBtn').disabled=false;mark('sMesh');$('stats').textContent=n.length+' nodes · '+e.length+' triangular elements';$('msg').textContent='Malla generada sobre la geometría detectada.'}
+function gauss(A,b){let n=b.length;for(let k=0;k<n;k++){let p=k;for(let i=k+1;i<n;i++)if(Math.abs(A[i][k])>Math.abs(A[p][k]))p=i;if(Math.abs(A[p][k])<1e-13)throw Error('Singular FEM system');[A[k],A[p]]=[A[p],A[k]];[b[k],b[p]]=[b[p],b[k]];let q=A[k][k];for(let j=k;j<n;j++)A[k][j]/=q;b[k]/=q;for(let i=0;i<n;i++)if(i!==k){let f=A[i][k];for(let j=k;j<n;j++)A[i][j]-=f*A[k][j];b[i]-=f*b[k]}}return b}
+$('solveBtn').onclick=()=>{if(!mesh)return;let N=mesh.n.length;if(N>600){$('msg').textContent='Mesh too fine for mobile solver. Increase mesh size.';return}let K=Array.from({length:N},()=>new Float64Array(N)),Fv=new Float64Array(N),kk=+$('k').value,t=+$('thk').value/1000,sm=scale/1000;
+mesh.e.forEach(el=>{let p=el.map(i=>mesh.n[i]),x=p.map(z=>z.x*sm),y=p.map(z=>z.y*sm),A=Math.abs((x[1]-x[0])*(y[2]-y[0])-(x[2]-x[0])*(y[1]-y[0]))/2,bb=[y[1]-y[2],y[2]-y[0],y[0]-y[1]],cc=[x[2]-x[1],x[0]-x[2],x[1]-x[0]];for(let i=0;i<3;i++)for(let j=0;j<3;j++)K[el[i]][el[j]]+=kk*t*(bb[i]*bb[j]+cc[i]*cc[j])/(4*A)});
+let b=domain.box,D=new Map(),tol=mesh.hpx*.7;mesh.n.forEach((p,i)=>{let name=Math.abs(p.x-b.x0)<tol?'left':Math.abs(p.x-b.x1)<tol?'right':Math.abs(p.y-b.y0)<tol?'top':Math.abs(p.y-b.y1)<tol?'bottom':null,bc=bcs.find(z=>z.edge===name);if(bc&&bc.type==='T')D.set(i,bc.value)});
+if(!D.size){$('msg').textContent='For this mobile FEM test, add at least one Temperature BC.';return}D.forEach((v,d)=>{for(let i=0;i<N;i++)if(i!==d){Fv[i]-=K[i][d]*v;K[i][d]=0;K[d][i]=0}K[d][d]=1;Fv[d]=v});
+try{T=gauss(K.map(r=>Array.from(r)),Array.from(Fv))}catch(e){$('msg').textContent='Solver failed: '+e.message;return}let mn=Math.min(...T),mx=Math.max(...T);$('tmin').textContent=mn.toFixed(1);$('tmax').textContent=mx.toFixed(1);$('legendBox').classList.remove('hidden');mark('sSolve');view='vector';draw();$('msg').textContent='FEM solved. Temperature colors are calculated from nodal temperatures.'}
+$('vphoto').onclick=()=>{view='photo';draw();$('legendBox').classList.add('hidden')};$('vvector').onclick=()=>{view='vector';draw();if(T)$('legendBox').classList.remove('hidden')}
+$('reset').onclick=()=>{img=null;contours=[];domain=mesh=T=null;scale=null;view='photo';ctx.clearRect(0,0,C.width,C.height);$('detect').disabled=true;$('meshBtn').disabled=true;$('solveBtn').disabled=true;$('msg').textContent='Toma una foto o elige una imagen del celular.'}
+draw();
+</script></body></html>
